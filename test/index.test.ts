@@ -34,3 +34,9 @@ test('sum in braces should be prioritized over multiple', () => {
 test('nested complex braces', () => {
   expect(tokenizeAndTranspile('((2+3)*4+(6/2))*(5+1)')).toBe(138)
 })
+
+test('variables', () => {
+  expect(tokenizeAndTranspile('x = 3+10; y=5; x +y;')).toBe(18)
+  expect(tokenizeAndTranspile('x = 2; y = x * 3; y + x;')).toBe(8)
+  expect(tokenizeAndTranspile('x=3.14; sin(x / 2);')).toBeCloseTo(1, 5)
+})

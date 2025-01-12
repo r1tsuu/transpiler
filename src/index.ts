@@ -1,5 +1,3 @@
-import { equal } from 'assert'
-
 function isStringNumber(str: string) {
   return !isNaN(Number(str))
 }
@@ -19,9 +17,21 @@ type FunctionCallToken = {
   type: 'FUNCTION_CALL'
 }
 
+type FunctionDeclarationToken = {
+  argumentNames: string[]
+  block: BlockToken
+  functionName: string
+  type: 'FUNCTION_DECLARATION'
+}
+
 type VariableDeclarationToken = {
   type: 'VARIABLE_DECLARATION'
-  value: number
+  valueTokens: Token[]
+  variableName: string
+}
+
+type VariableLiteralToken = {
+  type: 'VARIABLE_LITERAL'
   variableName: string
 }
 
@@ -33,12 +43,19 @@ type MathOperationToken = {
   type: 'OPERATOR_ADD' | 'OPERATOR_DIVIDE' | 'OPERATOR_MULTIPLE' | 'OPERATOR_SUB'
 }
 
+type BlockToken = {
+  tokens: Token[]
+  type: 'BLOCK'
+}
+
 type Token =
   | BraceToken
   | FunctionCallToken
+  | FunctionDeclarationToken
   | MathOperationToken
   | NumberLiteralToken
   | VariableDeclarationToken
+  | VariableLiteralToken
 
 const mathExpressionMap: Record<MathOperationToken['type'], string> = {
   OPERATOR_ADD: '+',
@@ -50,6 +67,55 @@ const mathExpressionMap: Record<MathOperationToken['type'], string> = {
 type ExecutionContext = {
   tokens: Token[]
   variables: Map<string, number>
+}
+
+const applyVariableDeclaration = (ctx: ExecutionContext) => {
+  const result: Token[] = []
+
+  const { tokens, variables } = ctx
+
+  for (const token of tokens) {
+    if (token.type === 'VARIABLE_DECLARATION') {
+      const variableContext: ExecutionContext = {
+        tokens: token.valueTokens,
+        variables,
+      }
+      const value = transpileExecutionContext(variableContext)!
+      variables.set(token.variableName, value)
+
+      continue
+    }
+
+    result.push(token)
+  }
+
+  ctx.tokens = result
+}
+
+const applyVariableUsage = (ctx: ExecutionContext) => {
+  const result: Token[] = []
+
+  const { tokens, variables } = ctx
+
+  for (const token of tokens) {
+    if (token.type === 'VARIABLE_LITERAL') {
+      const variableValue = variables.get(token.variableName)
+      if (variableValue === undefined) {
+        throw new ReferenceError(`$${token.variableName} is not defined`)
+      }
+
+      result.push({
+        type: 'NUMBER_LITERAL',
+        value: variableValue,
+      })
+
+      continue
+    }
+
+    result.push(token)
+  }
+
+  ctx.tokens = result
 }
 
 const applyFunctionCalls = (ctx: ExecutionContext) => {
@@ -217,6 +283,10 @@ const transpileExecutionContext = (ctx: ExecutionContext) => {
     return tryReturn(ctx)!
   }
 
+  applyVariableDeclaration(ctx)
+  console.dir(ctx.tokens)
+  applyVariableUsage(ctx)
+  console.dir(ctx.tokens)
   applyFunctionCalls(ctx)
   sanitizeParenthness(ctx)
 
@@ -234,6 +304,7 @@ const transpileExecutionContext = (ctx: ExecutionContext) => {
 }
 
 const tokenizeSource = (source: string) => {
+  source = source.trim()
   const tokens: Token[] = []
 
   let i = 0
@@ -304,9 +375,7 @@ const tokenizeSource = (source: string) => {
           type: 'NUMBER_LITERAL',
           value: 3.14159,
         })
-      }
-
-      if (source[i + 1] === '(') {
+      } else if (source[i + 1] === '(') {
         let argumentCode = ''
         for (let j = i + 2; j < source.length; j++) {
           if (source[j] === ')') {
@@ -321,6 +390,70 @@ const tokenizeSource = (source: string) => {
           type: 'FUNCTION_CALL',
           argTokens: tokenizeSource(argumentCode),
           functionName: word,
+        })
+      } else if (source[i + 1] === '=' || source[i + 1] + source[i + 2] === ' =') {
+        let variableDeclarationSource = ''
+        let variableDeclarationEnd = 0
+        for (let j = i + 1; j < source.length; j++) {
+          if (source[j] === '=') {
+            for (let k = j; k < source.length; k++) {
+              variableDeclarationEnd = k
+              if (source[k] === ';') {
+                break
+              } else {
+                variableDeclarationSource = `${variableDeclarationSource}${source[k]}`
+              }
+            }
+            break
+          }
+        }
+        i = variableDeclarationEnd
+        tokens.push({
+          type: 'VARIABLE_DECLARATION',
+          valueTokens: tokenizeSource(variableDeclarationSource),
+          variableName: word,
+        })
+      } else if (word === 'function') {
+        let functionName = ''
+        let j = i + 2
+        for (; j < source.length; j++) {
+          if (source[j] === '(') {
+            j++
+            break
+          }
+          functionName = `${functionName}${source[j]}`
+        }
+        const argumentNames: string[] = []
+
+        let currentVariableName = ''
+
+        for (; j < source.length; j++) {
+          if (source[j] === ',') {
+            argumentNames.push(currentVariableName)
+            currentVariableName = ''
+          } else if (source[j] === ')') {
+            argumentNames.push(currentVariableName)
+            break
+          } else {
+            currentVariableName = `${currentVariableName}${source[j]}`
+          }
+        }
+
+        tokens.push({
+          type: 'FUNCTION_DECLARATION',
+          argumentNames,
+          block: {
+            type: 'BLOCK',
+            tokens: [],
+          },
+          functionName,
+        })
+
+        i = j
+      } else {
+        tokens.push({
+          type: 'VARIABLE_LITERAL',
+          variableName: word,
         })
       }
     }
@@ -351,3 +484,5 @@ const tokenizeAndTranspile = (source: string): null | number => {
 }
 
 export { tokenizeAndTranspile, tokenizeSource, transpileExecutionContext }
+
+console.dir(tokenizeSource('function x(y,z)'))
