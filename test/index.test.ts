@@ -40,3 +40,7 @@ test('variables', () => {
   expect(tokenizeAndTranspile('x = 2; y = x * 3; y + x;')).toBe(8)
   expect(tokenizeAndTranspile('x=3.14; sin(x / 2);')).toBeCloseTo(1, 5)
 })
+
+test('functions', () => {
+  expect(tokenizeAndTranspile('x=3;function someFunc(y) { 3+y; }; someFunc(5)')).toBe(8)
+})

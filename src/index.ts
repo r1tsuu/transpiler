@@ -19,8 +19,8 @@ type FunctionCallToken = {
 
 type FunctionDeclarationToken = {
   argumentNames: string[]
-  block: BlockToken
   functionName: string
+  tokens: Token[]
   type: 'FUNCTION_DECLARATION'
 }
 
@@ -43,11 +43,6 @@ type MathOperationToken = {
   type: 'OPERATOR_ADD' | 'OPERATOR_DIVIDE' | 'OPERATOR_MULTIPLE' | 'OPERATOR_SUB'
 }
 
-type BlockToken = {
-  tokens: Token[]
-  type: 'BLOCK'
-}
-
 type Token =
   | BraceToken
   | FunctionCallToken
@@ -65,18 +60,50 @@ const mathExpressionMap: Record<MathOperationToken['type'], string> = {
 }
 
 type ExecutionContext = {
+  functions: Map<string, (...args: number[]) => number>
   tokens: Token[]
   variables: Map<string, number>
+}
+
+const applyFunctionDeclaration = (ctx: ExecutionContext) => {
+  const result: Token[] = []
+
+  const { functions, tokens, variables } = ctx
+
+  for (const token of tokens) {
+    if (token.type === 'FUNCTION_DECLARATION') {
+      functions.set(token.functionName, (...args: number[]) => {
+        const functionVariables = new Map(variables)
+
+        for (let i = 0; i < token.argumentNames.length; i++) {
+          functionVariables.set(token.argumentNames[i], args[i])
+        }
+
+        return transpileExecutionContext({
+          functions,
+          tokens: token.tokens,
+          variables: functionVariables,
+        })!
+      })
+
+      continue
+    }
+
+    result.push(token)
+  }
+
+  ctx.tokens = result
 }
 
 const applyVariableDeclaration = (ctx: ExecutionContext) => {
   const result: Token[] = []
 
-  const { tokens, variables } = ctx
+  const { functions, tokens, variables } = ctx
 
   for (const token of tokens) {
     if (token.type === 'VARIABLE_DECLARATION') {
       const variableContext: ExecutionContext = {
+        functions,
         tokens: token.valueTokens,
         variables,
       }
@@ -121,42 +148,50 @@ const applyVariableUsage = (ctx: ExecutionContext) => {
 const applyFunctionCalls = (ctx: ExecutionContext) => {
   const result: Token[] = []
 
-  const { tokens, variables } = ctx
+  const { functions, tokens, variables } = ctx
 
   for (const token of tokens) {
     if (token.type === 'FUNCTION_CALL') {
       const value = transpileExecutionContext({
+        functions,
         tokens: token.argTokens,
         variables,
       })!
 
-      switch (token.functionName) {
-        case 'cos':
-          result.push({
-            type: 'NUMBER_LITERAL',
-            value: Math.sin(value),
-          })
-          break
-        case 'log':
-          result.push({
-            type: 'NUMBER_LITERAL',
-            value: Math.log(value),
-          })
-          break
-        case 'sin':
-          result.push({
-            type: 'NUMBER_LITERAL',
-            value: Math.sin(value),
-          })
-          break
-        case 'sqrt':
-          result.push({
-            type: 'NUMBER_LITERAL',
-            value: Math.sqrt(value),
-          })
-          break
-        default:
-          throw new Error(`Unknown function ${token.functionName}`)
+      if (functions.has(token.functionName)) {
+        const func = functions.get(token.functionName)!
+
+        result.push({ type: 'NUMBER_LITERAL', value: func(value) })
+        // standard lib
+      } else {
+        switch (token.functionName) {
+          case 'cos':
+            result.push({
+              type: 'NUMBER_LITERAL',
+              value: Math.sin(value),
+            })
+            break
+          case 'log':
+            result.push({
+              type: 'NUMBER_LITERAL',
+              value: Math.log(value),
+            })
+            break
+          case 'sin':
+            result.push({
+              type: 'NUMBER_LITERAL',
+              value: Math.sin(value),
+            })
+            break
+          case 'sqrt':
+            result.push({
+              type: 'NUMBER_LITERAL',
+              value: Math.sqrt(value),
+            })
+            break
+          default:
+            throw new Error(`Unknown function ${token.functionName}`)
+        }
       }
     } else {
       result.push(token)
@@ -168,7 +203,7 @@ const applyFunctionCalls = (ctx: ExecutionContext) => {
 
 const sanitizeParenthness = (ctx: ExecutionContext) => {
   const result: Token[] = []
-  const { tokens, variables } = ctx
+  const { functions, tokens, variables } = ctx
 
   for (let i = 0; i < tokens.length; i++) {
     const token = tokens[i]
@@ -192,7 +227,11 @@ const sanitizeParenthness = (ctx: ExecutionContext) => {
         }
       }
 
-      const value = transpileExecutionContext({ tokens: tokens.splice(i + 1, end - 1), variables })
+      const value = transpileExecutionContext({
+        functions,
+        tokens: tokens.splice(i + 1, end - 1),
+        variables,
+      })
 
       if (value === null) {
         throw new Error('Bad brace value')
@@ -283,6 +322,7 @@ const transpileExecutionContext = (ctx: ExecutionContext) => {
     return tryReturn(ctx)!
   }
 
+  applyFunctionDeclaration(ctx)
   applyVariableDeclaration(ctx)
   console.dir(ctx.tokens)
   applyVariableUsage(ctx)
@@ -433,20 +473,44 @@ const tokenizeSource = (source: string) => {
             currentVariableName = ''
           } else if (source[j] === ')') {
             argumentNames.push(currentVariableName)
+            j++
             break
           } else {
             currentVariableName = `${currentVariableName}${source[j]}`
           }
         }
 
+        let blockCode = ''
+        let insideBlock = false
+        let extraBlocks = 0
+        for (; j < source.length; j++) {
+          if (!insideBlock && source[j] === '{') {
+            insideBlock = true
+            continue
+          }
+
+          if (source[j] === '{') {
+            extraBlocks++
+          }
+
+          if (source[j] === '}') {
+            if (extraBlocks) {
+              extraBlocks--
+            } else {
+              break
+            }
+          }
+
+          if (insideBlock) {
+            blockCode = `${blockCode}${source[j]}`
+          }
+        }
+
         tokens.push({
           type: 'FUNCTION_DECLARATION',
           argumentNames,
-          block: {
-            type: 'BLOCK',
-            tokens: [],
-          },
           functionName,
+          tokens: tokenizeSource(blockCode),
         })
 
         i = j
@@ -478,6 +542,7 @@ const tokenizeSource = (source: string) => {
 
 const tokenizeAndTranspile = (source: string): null | number => {
   return transpileExecutionContext({
+    functions: new Map(),
     tokens: tokenizeSource(source),
     variables: new Map(),
   })
@@ -485,4 +550,4 @@ const tokenizeAndTranspile = (source: string): null | number => {
 
 export { tokenizeAndTranspile, tokenizeSource, transpileExecutionContext }
 
-console.dir(tokenizeSource('function x(y,z)'))
+console.dir(tokenizeSource('x=3;function x(y,z) { y; }; x(5)'), { depth: 4 })
